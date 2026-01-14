@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Runes & Favors (Orlog-like Prototype)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background: #0b1020; color: #eaf0ff; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 18px; }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .sub { opacity: .8; margin-bottom: 14px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+    .card { background: #121a33; border: 1px solid #23305c; border-radius: 12px; padding: 14px; }
+    .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .stat { display:flex; gap: 10px; flex-wrap: wrap; }
+    .pill {
+      background:#0f1630; border:1px solid #2a3a72; border-radius: 999px;
+      padding: 6px 10px; font-size: 13px;
+    }
+    button {
+      background:#2b5cff; color:white; border:none; border-radius: 10px;
+      padding: 10px 12px; cursor:pointer; font-weight: 700;
+    }
+    button.secondary { background: #1d2a52; border: 1px solid #2a3a72; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .dice-area { display:flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .die {
+      width: 120px; border-radius: 12px; border:1px solid #2a3a72;
+      background:#0f1630; padding: 10px; cursor:pointer;
+      user-select:none;
+    }
+    .die.locked { outline: 2px solid #2b5cff; }
+    .face { font-size: 22px; font-weight: 900; }
+    .small { font-size: 12px; opacity: .75; margin-top: 4px; }
+    .log { max-height: 280px; overflow:auto; background:#0f1630; border:1px solid #2a3a72; border-radius: 10px; padding: 10px; }
+    .log p { margin: 6px 0; font-size: 13px; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; padding: 2px 6px; border:1px solid #2a3a72; border-radius: 6px; background:#0b1020; }
+    .powers { display:grid; gap: 10px; grid-template-columns: repeat(2, minmax(0,1fr)); margin-top: 10px; }
+    .power { border:1px solid #2a3a72; border-radius: 12px; padding: 10px; background:#0f1630; }
+    .power h4 { margin: 0 0 4px; font-size: 14px; }
+    .power .desc { font-size: 12px; opacity: .85; }
+    .power .cost { font-size: 12px; opacity: .9; margin-top: 6px; }
+    .power button { margin-top: 8px; width: 100%; }
+    .footer { margin-top: 14px; opacity: .75; font-size: 12px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Runes & Favors</h1>
+    <div class="sub">
+      An original dice-battle prototype inspired by “dice + powers” games.
+      Roll up to 3 times, lock dice you keep, then resolve damage, blocks, and Favor.
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row">
+          <button id="btnNew">New Match</button>
+          <button id="btnRoll" class="secondary">Roll</button>
+          <button id="btnResolve" class="secondary">Resolve Round</button>
+          <span class="pill">Tip: click dice to <b>lock</b> them</span>
+        </div>
+
+        <div class="stat" style="margin-top:10px">
+          <span class="pill">Round: <b id="roundNum">1</b> / <span id="roundMax">3</span></span>
+          <span class="pill">Rolls left: <b id="rollsLeft">3</b></span>
+        </div>
+
+        <h3 style="margin:14px 0 6px">Your Dice</h3>
+        <div id="playerDice" class="dice-area"></div>
+
+        <h3 style="margin:14px 0 6px">AI Dice (revealed on resolve)</h3>
+        <div id="aiDice" class="dice-area"></div>
+
+        <div class="footer">
+          Dice faces: ⚔ Attack (1) · 🛡 Block (1) · 💉 Heal (1) · ✨ Favor (1) · 🪓 Heavy (2 attack) · 🧱 Guard (2 block)
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="stat">
+          <span class="pill">You HP: <b id="pHP">15</b></span>
+          <span class="pill">AI HP: <b id="aHP">15</b></span>
+          <span class="pill">You Favor: <b id="pFav">0</b></span>
+          <span class="pill">AI Favor: <b id="aFav">0</b></span>
+        </div>
+
+        <h3 style="margin:14px 0 6px">Your Powers (spend Favor)</h3>
+        <div class="powers" id="powers"></div>
+
+        <h3 style="margin:14px 0 6px">Battle Log</h3>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---- Game config ----
+  const MAX_HP = 15;
+  const MAX_ROUNDS = 3;
+  const DICE_COUNT = 6;
+  const ROLLS_PER_ROUND = 3;
+
+  // Face definitions (original, but same “style”)
+  const FACES = [
+    { key:"atk", name:"Attack", icon:"⚔", val:1, desc:"+1 attack" },
+    { key:"blk", name:"Block",  icon:"🛡", val:1, desc:"+1 block" },
+    { key:"hl",  name:"Heal",   icon:"💉", val:1, desc:"+1 heal" },
+    { key:"fav", name:"Favor",  icon:"✨", val:1, desc:"+1 favor" },
+    { key:"hatk",name:"Heavy",  icon:"🪓", val:2, desc:"+2 attack" },
+    { key:"gblk",name:"Guard",  icon:"🧱", val:2, desc:"+2 block" },
+  ];
+
+  // Original powers (NOT Orlog’s)
+  const POWERS = [
+    {
+      id: "wind",
+      title: "Gale Shift",
+      cost: 3,
+      desc: "Before resolving, convert up to 2 of your Block dice into Attack dice.",
+      when: "pre",
+      use: (state) => {
+        let converted = 0;
+        for (const d of state.playerDice) {
+          if (converted >= 2) break;
+          if (d.face.key === "blk" || d.face.key === "gblk") {
+            d.face = FACES.find(f => f.key === "atk");
+            converted++;
+          }
+        }
+        log(`You cast <b>Gale Shift</b>: converted ${converted} block die${converted===1?"":"s"} to attack.`);
+      }
+    },
+    {
+      id: "stone",
+      title: "Stone Skin",
+      cost: 4,
+      desc: "Gain +3 block this round (added after dice are counted).",
+      when: "resolve",
+      use: (state) => {
+        state.playerBonusBlock += 3;
+        log(`You cast <b>Stone Skin</b>: +3 block this round.`);
+      }
+    },
+    {
+      id: "spark",
+      title: "Spark of Fortune",
+      cost: 2,
+      desc: "Roll 2 extra “spark dice” (only ✨ Favor or ⚔ Attack).",
+      when: "pre",
+      use: (state) => {
+        const sparkFaces = [
+          { key:"fav", name:"Favor", icon:"✨", val:1, desc:"+1 favor" },
+          { key:"atk", name:"Attack", icon:"⚔", val:1, desc:"+1 attack" },
+        ];
+        let added = [];
+        for (let i=0;i<2;i++){
+          const face = sparkFaces[Math.floor(Math.random()*sparkFaces.length)];
+          state.playerDice.push({ face, locked:true, spark:true });
+          added.push(face.icon);
+        }
+        log(`You cast <b>Spark of Fortune</b>: added spark dice ${added.join(" ")}.`);
+      }
+    },
+    {
+      id: "mend",
+      title: "Second Breath",
+      cost: 5,
+      desc: "After damage, heal 4 HP (cannot exceed max HP).",
+      when: "post",
+      use: (state) => {
+        state.playerPostHeal += 4;
+        log(`You cast <b>Second Breath</b>: will heal 4 after damage.`);
+      }
+    }
+  ];
+
+  // ---- State ----
+  const state = {
+    round: 1,
+    maxRounds: MAX_ROUNDS,
+    rollsLeft: ROLLS_PER_ROUND,
+    playerHP: MAX_HP,
+    aiHP: MAX_HP,
+    playerFavor: 0,
+    aiFavor: 0,
+    playerDice: [],
+    aiDice: [],
+    revealedAI: false,
+
+    // per-round modifiers
+    playerBonusBlock: 0,
+    aiBonusBlock: 0,
+    playerPostHeal: 0,
+    aiPostHeal: 0,
+
+    // power usage
+    playerUsedPowerThisRound: false,
+    aiUsedPowerThisRound: false,
+  };
+
+  // ---- DOM ----
+  const $ = (id) => document.getElementById(id);
+  const elPlayerDice = $("playerDice");
+  const elAiDice = $("aiDice");
+  const elLog = $("log");
+
+  const btnNew = $("btnNew");
+  const btnRoll = $("btnRoll");
+  const btnResolve = $("btnResolve");
+
+  // ---- Utilities ----
+  function log(msg) {
+    const p = document.createElement("p");
+    p.innerHTML = msg;
+    elLog.appendChild(p);
+    elLog.scrollTop = elLog.scrollHeight;
+  }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function rollFace() {
+    return FACES[Math.floor(Math.random() * FACES.length)];
+  }
+
+  function freshDice(count) {
+    const dice = [];
+    for (let i=0;i<count;i++) dice.push({ face: rollFace(), locked: false });
+    return dice;
+  }
+
+  function countTotals(dice) {
+    const totals = { atk:0, blk:0, hl:0, fav:0 };
+    for (const d of dice) {
+      const k = d.face.key;
+      if (k === "atk") totals.atk += d.face.val;
+      else if (k === "hatk") totals.atk += d.face.val;
+      else if (k === "blk") totals.blk += d.face.val;
+      else if (k === "gblk") totals.blk += d.face.val;
+      else if (k === "hl") totals.hl += d.face.val;
+      else if (k === "fav") totals.fav += d.face.val;
+    }
+    return totals;
+  }
+
+  function render() {
+    $("roundNum").textContent = state.round;
+    $("roundMax").textContent = state.maxRounds;
+    $("rollsLeft").textContent = state.rollsLeft;
+
+    $("pHP").textContent = state.playerHP;
+    $("aHP").textContent = state.aiHP;
+    $("pFav").textContent = state.playerFavor;
+    $("aFav").textContent = state.aiFavor;
+
+    btnRoll.disabled = state.rollsLeft <= 0 || isMatchOver();
+    btnResolve.disabled = isMatchOver();
+
+    // render player dice
+    elPlayerDice.innerHTML = "";
+    state.playerDice.forEach((d, idx) => {
+      const die = document.createElement("div");
+      die.className = "die" + (d.locked ? " locked" : "");
+      die.innerHTML = `
+        <div class="face">${d.face.icon} ${d.face.name}</div>
+        <div class="small">${d.face.desc}${d.spark ? " · spark" : ""}</div>
+        <div class="small">Click to ${d.locked ? "unlock" : "lock"}</div>
+      `;
+      die.onclick = () => {
+        if (isMatchOver()) return;
+        // spark dice stay locked
+        if (d.spark) return;
+        d.locked = !d.locked;
+        render();
+      };
+      elPlayerDice.appendChild(die);
+    });
+
+    // render AI dice
+    elAiDice.innerHTML = "";
+    state.aiDice.forEach((d) => {
+      const die = document.createElement("div");
+      die.className = "die" + (state.revealedAI ? " locked" : "");
+      if (state.revealedAI) {
+        die.innerHTML = `
+          <div class="face">${d.face.icon} ${d.face.name}</div>
+          <div class="small">${d.face.desc}</div>
+        `;
+      } else {
+        die.innerHTML = `
+          <div class="face">❓ Hidden</div>
+          <div class="small">Reveals on resolve</div>
+        `;
+      }
+      elAiDice.appendChild(die);
+    });
+
+    // powers
+    const elPowers = $("powers");
+    elPowers.innerHTML = "";
+    for (const p of POWERS) {
+      const wrap = document.createElement("div");
+      wrap.className = "power";
+      const canUse = !state.playerUsedPowerThisRound && state.playerFavor >= p.cost && !isMatchOver();
+      wrap.innerHTML = `
+        <h4>${p.title}</h4>
+        <div class="desc">${p.desc}</div>
+        <div class="cost">Cost: <b>${p.cost}</b> Favor</div>
+      `;
+      const b = document.createElement("button");
+      b.textContent = canUse ? "Use" : "Can't use";
+      b.disabled = !canUse;
+      b.onclick = () => usePower(p);
+      wrap.appendChild(b);
+      elPowers.appendChild(wrap);
+    }
+  }
+
+  function isMatchOver() {
+    return state.playerHP <= 0 || state.aiHP <= 0 || state.round > state.maxRounds;
+  }
+
+  function startRound() {
+    state.rollsLeft = ROLLS_PER_ROUND;
+    state.playerDice = freshDice(DICE_COUNT);
+    state.aiDice = freshDice(DICE_COUNT);
+    state.revealedAI = false;
+
+    state.playerBonusBlock = 0;
+    state.aiBonusBlock = 0;
+    state.playerPostHeal = 0;
+    state.aiPostHeal = 0;
+    state.playerUsedPowerThisRound = false;
+    state.aiUsedPowerThisRound = false;
+
+    log(`<b>Round ${state.round}</b> begins. You have <span class="kbd">3</span> rolls.`);
+    render();
+  }
+
+  function newMatch() {
+    elLog.innerHTML = "";
+    Object.assign(state, {
+      round: 1,
+      maxRounds: MAX_ROUNDS,
+      playerHP: MAX_HP,
+      aiHP: MAX_HP,
+      playerFavor: 0,
+      aiFavor: 0,
+    });
+    log(`New match started. First to drop to 0 HP loses.`);
+    startRound();
+  }
+
+  function rerollUnlocked(dice) {
+    for (const d of dice) {
+      if (!d.locked) d.face = rollFace();
+    }
+  }
+
+  function aiDecideLocks() {
+    // Simple AI: prioritize attack+block, lock favors if low, lock heals if wounded.
+    const wantHeal = state.aiHP <= 7;
+    const wantFavor = state.aiFavor <= 2;
+
+    for (const d of state.aiDice) {
+      const k = d.face.key;
+      let lock = false;
+      if (k === "hatk" || k === "gblk") lock = true;
+      if (k === "atk" || k === "blk") lock = Math.random() < 0.55;
+      if (k === "fav" && wantFavor) lock = Math.random() < 0.7;
+      if (k === "hl" && wantHeal) lock = Math.random() < 0.7;
+      d.locked = lock;
+    }
+  }
+
+  function aiMaybeUsePowerPre() {
+    if (state.aiUsedPowerThisRound) return;
+    // AI picks one power sometimes if it can afford it.
+    const affordable = POWERS.filter(p => p.when === "pre" && state.aiFavor >= p.cost);
+    if (!affordable.length) return;
+    if (Math.random() < 0.45) {
+      const pick = affordable[Math.floor(Math.random()*affordable.length)];
+      state.aiFavor -= pick.cost;
+      state.aiUsedPowerThisRound = true;
+
+      // Apply AI effect mirrored (simplified)
+      if (pick.id === "wind") {
+        let converted = 0;
+        for (const d of state.aiDice) {
+          if (converted >= 2) break;
+          if (d.face.key === "blk" || d.face.key === "gblk") {
+            d.face = FACES.find(f => f.key === "atk");
+            converted++;
+          }
+        }
+        log(`AI casts <b>Gale Shift</b>: converted ${converted} block dice to attack.`);
+      } else if (pick.id === "spark") {
+        const sparkFaces = [
+          { key:"fav", name:"Favor", icon:"✨", val:1, desc:"+1 favor" },
+          { key:"atk", name:"Attack", icon:"⚔", val:1, desc:"+1 attack" },
+        ];
+        let added = [];
+        for (let i=0;i<2;i++){
+          const face = sparkFaces[Math.floor(Math.random()*sparkFaces.length)];
+          state.aiDice.push({ face, locked:true, spark:true });
+          added.push(face.icon);
+        }
+        log(`AI casts <b>Spark of Fortune</b>: added spark dice ${added.join(" ")}.`);
+      }
+    }
+  }
+
+  function aiMaybeUsePowerResolve() {
+    if (state.aiUsedPowerThisRound) return;
+    const affordable = POWERS.filter(p => p.when === "resolve" && state.aiFavor >= p.cost);
+    if (!affordable.length) return;
+    if (Math.random() < 0.35) {
+      const pick = affordable[Math.floor(Math.random()*affordable.length)];
+      state.aiFavor -= pick.cost;
+      state.aiUsedPowerThisRound = true;
+
+      if (pick.id === "stone") {
+        state.aiBonusBlock += 3;
+        log(`AI casts <b>Stone Skin</b>: +3 block this round.`);
+      }
+    }
+  }
+
+  function aiMaybeUsePowerPost() {
+    if (state.aiUsedPowerThisRound) return;
+    const affordable = POWERS.filter(p => p.when === "post" && state.aiFavor >= p.cost);
+    if (!affordable.length) return;
+    // If AI is low, more likely to heal
+    const chance = state.aiHP <= 6 ? 0.7 : 0.25;
+    if (Math.random() < chance) {
+      const pick = affordable.find(p => p.id === "mend") || affordable[0];
+      state.aiFavor -= pick.cost;
+      state.aiUsedPowerThisRound = true;
+
+      if (pick.id === "mend") {
+        state.aiPostHeal += 4;
+        log(`AI casts <b>Second Breath</b>: will heal 4 after damage.`);
+      }
+    }
+  }
+
+  function usePower(power) {
+    if (state.playerUsedPowerThisRound) return;
+    if (state.playerFavor < power.cost) return;
+    state.playerFavor -= power.cost;
+    state.playerUsedPowerThisRound = true;
+    power.use(state);
+    render();
+  }
+
+  function roll() {
+    if (state.rollsLeft <= 0 || isMatchOver()) return;
+
+    // AI chooses locks before each roll
+    aiDecideLocks();
+
+    rerollUnlocked(state.playerDice);
+    rerollUnlocked(state.aiDice);
+
+    state.rollsLeft -= 1;
+    log(`You roll. Rolls left: <b>${state.rollsLeft}</b>. (AI also rerolls.)`);
+    render();
+  }
+
+  function resolveRound() {
+    if (isMatchOver()) return;
+
+    // AI may use pre powers
+    aiMaybeUsePowerPre();
+
+    // Player may have used pre powers already via UI
+    // Now AI may use resolve powers
+    aiMaybeUsePowerResolve();
+
+    state.revealedAI = true;
+
+    const p = countTotals(state.playerDice);
+    const a = countTotals(state.aiDice);
+
+    // Favor gain (from dice)
+    state.playerFavor += p.fav;
+    state.aiFavor += a.fav;
+
+    // Healing from dice
+    state.playerHP = clamp(state.playerHP + p.hl, 0, MAX_HP);
+    state.aiHP = clamp(state.aiHP + a.hl, 0, MAX_HP);
+
+    // Apply bonus blocks (from powers)
+    p.blk += state.playerBonusBlock;
+    a.blk += state.aiBonusBlock;
+
+    // Damage = attack - opponent block
+    const pDamage = Math.max(0, p.atk - a.blk);
+    const aDamage = Math.max(0, a.atk - p.blk);
+
+    state.aiHP = clamp(state.aiHP - pDamage, 0, MAX_HP);
+    state.playerHP = clamp(state.playerHP - aDamage, 0, MAX_HP);
+
+    log(`<b>Resolve:</b> You: ⚔${p.atk} 🛡${p.blk} 💉${p.hl} ✨${p.fav} → dealt <b>${pDamage}</b>.`);
+    log(`<b>Resolve:</b> AI: ⚔${a.atk} 🛡${a.blk} 💉${a.hl} ✨${a.fav} → dealt <b>${aDamage}</b>.`);
+
+    // AI post powers
+    aiMaybeUsePowerPost();
+
+    // Player post powers happen if they used Second Breath
+    // (playerPostHeal set by power)
+    if (state.playerPostHeal > 0) {
+      state.playerHP = clamp(state.playerHP + state.playerPostHeal, 0, MAX_HP);
+      log(`You heal <b>${state.playerPostHeal}</b> from <b>Second Breath</b>.`);
+      state.playerPostHeal = 0;
+    }
+    if (state.aiPostHeal > 0) {
+      state.aiHP = clamp(state.aiHP + state.aiPostHeal, 0, MAX_HP);
+      log(`AI heals <b>${state.aiPostHeal}</b> from <b>Second Breath</b>.`);
+      state.aiPostHeal = 0;
+    }
+
+    // Round end / match end
+    if (state.playerHP <= 0 && state.aiHP <= 0) {
+      log(`<b>Double KO!</b> It’s a draw.`);
+      state.round = state.maxRounds + 1;
+    } else if (state.aiHP <= 0) {
+      log(`<b>You win!</b> AI is down.`);
+      state.round = state.maxRounds + 1;
+    } else if (state.playerHP <= 0) {
+      log(`<b>You lose.</b> You’re down.`);
+      state.round = state.maxRounds + 1;
+    } else {
+      state.round += 1;
+      if (state.round > state.maxRounds) {
+        // Decide by HP if rounds end
+        if (state.playerHP > state.aiHP) log(`<b>Match over:</b> You win by HP (${state.playerHP} vs ${state.aiHP}).`);
+        else if (state.aiHP > state.playerHP) log(`<b>Match over:</b> AI wins by HP (${state.aiHP} vs ${state.playerHP}).`);
+        else log(`<b>Match over:</b> Draw (${state.playerHP} vs ${state.aiHP}).`);
+      } else {
+        log(`<hr style="border:none;border-top:1px solid #2a3a72; opacity:.6">`);
+        startRound();
+        return;
+      }
+    }
+
+    render();
+  }
+
+  // ---- Wire up ----
+  btnNew.onclick = newMatch;
+  btnRoll.onclick = roll;
+  btnResolve.onclick = resolveRound;
+
+  // Start
+  newMatch();
+})();
+</script>
+</body>
+</html>
